@@ -1356,6 +1356,7 @@ DEFAULT_CONFIG = {
     # Slack platform settings (gateway mode)
     "slack": {
         "require_mention": True,       # Require @mention to respond in channels
+        "respond_only_when_mentioned": False,  # Listen to channel/thread events, but only invoke the agent on @mention
         "free_response_channels": "",  # Comma-separated channel IDs where bot responds without mention
         "allowed_channels": "",        # If set, bot ONLY responds in these channel IDs (whitelist)
         "channel_prompts": {},         # Per-channel ephemeral system prompts

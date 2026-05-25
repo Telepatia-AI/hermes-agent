@@ -1973,6 +1973,8 @@ class SlackAdapter(BasePlatformAdapter):
                 pass  # Free-response channel — always process
             elif not self._slack_require_mention():
                 pass  # Mention requirement disabled globally for Slack
+            elif self._slack_respond_only_when_mentioned() and not is_mentioned:
+                return  # Listen-all delivery, but only respond when @mentioned
             elif self._slack_strict_mention() and not is_mentioned:
                 return  # Strict mode: ignore until @-mentioned again
             elif not is_mentioned:
@@ -2010,11 +2012,20 @@ class SlackAdapter(BasePlatformAdapter):
 
         # When entering a thread for the first time (no existing session),
         # fetch thread context so the agent understands the conversation.
-        if is_thread_reply and not self._has_active_session_for_thread(
+        # In mention-only response mode, refresh the Slack thread context on
+        # every direct @mention. Unmentioned thread messages are deliberately
+        # not processed, so the active Hermes session may be stale; Slack
+        # history is the source of truth for context at mention time.
+        has_active_thread_session = self._has_active_session_for_thread(
             channel_id=channel_id,
             thread_ts=event_thread_ts,
             user_id=user_id,
-        ):
+        ) if is_thread_reply else False
+        should_fetch_thread_context = is_thread_reply and (
+            not has_active_thread_session
+            or (is_mentioned and self._slack_respond_only_when_mentioned())
+        )
+        if should_fetch_thread_context:
             thread_context = await self._fetch_thread_context(
                 channel_id=channel_id,
                 thread_ts=event_thread_ts,
@@ -2991,6 +3002,21 @@ class SlackAdapter(BasePlatformAdapter):
                 return configured.lower() in {"true", "1", "yes", "on"}
             return bool(configured)
         return os.getenv("SLACK_STRICT_MENTION", "false").lower() in {"true", "1", "yes", "on"}
+
+    def _slack_respond_only_when_mentioned(self) -> bool:
+        """When true, receive Slack channel/thread events but only invoke the
+        agent for direct @mentions.
+
+        This differs from strict_mention by refreshing Slack thread history on
+        each direct @mention, so unmentioned replies can still be used as
+        context without causing unsolicited responses.
+        """
+        configured = self.config.extra.get("respond_only_when_mentioned")
+        if configured is not None:
+            if isinstance(configured, str):
+                return configured.lower() in {"true", "1", "yes", "on"}
+            return bool(configured)
+        return os.getenv("SLACK_RESPOND_ONLY_WHEN_MENTIONED", "false").lower() in {"true", "1", "yes", "on"}
 
     def _slack_free_response_channels(self) -> set:
         """Return channel IDs where no @mention is required."""

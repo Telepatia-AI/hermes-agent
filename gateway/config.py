@@ -912,6 +912,8 @@ def load_gateway_config() -> GatewayConfig:
                     os.environ["SLACK_REQUIRE_MENTION"] = str(slack_cfg["require_mention"]).lower()
                 if "strict_mention" in slack_cfg and not os.getenv("SLACK_STRICT_MENTION"):
                     os.environ["SLACK_STRICT_MENTION"] = str(slack_cfg["strict_mention"]).lower()
+                if "respond_only_when_mentioned" in slack_cfg and not os.getenv("SLACK_RESPOND_ONLY_WHEN_MENTIONED"):
+                    os.environ["SLACK_RESPOND_ONLY_WHEN_MENTIONED"] = str(slack_cfg["respond_only_when_mentioned"]).lower()
                 if "allow_bots" in slack_cfg and not os.getenv("SLACK_ALLOW_BOTS"):
                     os.environ["SLACK_ALLOW_BOTS"] = str(slack_cfg["allow_bots"]).lower()
                 frc = slack_cfg.get("free_response_channels")

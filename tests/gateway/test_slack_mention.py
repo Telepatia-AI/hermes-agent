@@ -55,12 +55,20 @@ CHANNEL_ID = "C0AQWDLHY9M"
 OTHER_CHANNEL_ID = "C9999999999"
 
 
-def _make_adapter(require_mention=None, strict_mention=None, free_response_channels=None, allowed_channels=None):
+def _make_adapter(
+    require_mention=None,
+    strict_mention=None,
+    free_response_channels=None,
+    allowed_channels=None,
+    respond_only_when_mentioned=None,
+):
     extra = {}
     if require_mention is not None:
         extra["require_mention"] = require_mention
     if strict_mention is not None:
         extra["strict_mention"] = strict_mention
+    if respond_only_when_mentioned is not None:
+        extra["respond_only_when_mentioned"] = respond_only_when_mentioned
     if free_response_channels is not None:
         extra["free_response_channels"] = free_response_channels
     if allowed_channels is not None:
@@ -181,6 +189,28 @@ def test_strict_mention_env_var_fallback(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Tests: _slack_respond_only_when_mentioned
+# ---------------------------------------------------------------------------
+
+
+def test_respond_only_when_mentioned_defaults_to_false(monkeypatch):
+    monkeypatch.delenv("SLACK_RESPOND_ONLY_WHEN_MENTIONED", raising=False)
+    adapter = _make_adapter()
+    assert adapter._slack_respond_only_when_mentioned() is False
+
+
+def test_respond_only_when_mentioned_true():
+    adapter = _make_adapter(respond_only_when_mentioned=True)
+    assert adapter._slack_respond_only_when_mentioned() is True
+
+
+def test_respond_only_when_mentioned_env_var_fallback(monkeypatch):
+    monkeypatch.setenv("SLACK_RESPOND_ONLY_WHEN_MENTIONED", "true")
+    adapter = _make_adapter()
+    assert adapter._slack_respond_only_when_mentioned() is True
+
+
+# ---------------------------------------------------------------------------
 # Tests: _slack_free_response_channels
 # ---------------------------------------------------------------------------
 
@@ -261,6 +291,8 @@ def _would_process(adapter, *, is_dm=False, channel_id=CHANNEL_ID,
             return True
         elif not adapter._slack_require_mention():
             return True
+        elif adapter._slack_respond_only_when_mentioned() and not is_mentioned:
+            return False
         elif not is_mentioned:
             if thread_reply and active_session:
                 return True
@@ -310,6 +342,30 @@ def test_thread_reply_with_active_session_processed():
     assert _would_process(
         adapter, text="followup",
         thread_reply=True, active_session=True,
+    ) is True
+
+
+def test_respond_only_when_mentioned_ignores_active_thread_reply_without_mention():
+    adapter = _make_adapter(
+        require_mention=True,
+        respond_only_when_mentioned=True,
+    )
+    assert _would_process(
+        adapter, text="followup",
+        thread_reply=True, active_session=True,
+    ) is False
+
+
+def test_respond_only_when_mentioned_processes_thread_reply_with_mention():
+    adapter = _make_adapter(
+        require_mention=True,
+        respond_only_when_mentioned=True,
+    )
+    assert _would_process(
+        adapter, text="followup",
+        mentioned=True,
+        thread_reply=True,
+        active_session=True,
     ) is True
 
 
@@ -514,6 +570,28 @@ def test_config_bridges_slack_strict_mention(monkeypatch, tmp_path):
     assert config is not None
     import os as _os
     assert _os.environ["SLACK_STRICT_MENTION"] == "true"
+
+
+def test_config_bridges_slack_respond_only_when_mentioned(monkeypatch, tmp_path):
+    from gateway.config import load_gateway_config
+
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "slack:\n"
+        "  respond_only_when_mentioned: true\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.delenv("SLACK_RESPOND_ONLY_WHEN_MENTIONED", raising=False)
+
+    config = load_gateway_config()
+
+    assert config is not None
+    import os as _os
+    assert _os.environ["SLACK_RESPOND_ONLY_WHEN_MENTIONED"] == "true"
 
 
 # ---------------------------------------------------------------------------
