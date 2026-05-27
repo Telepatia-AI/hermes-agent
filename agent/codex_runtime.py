@@ -335,6 +335,52 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 )
                 return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
             raise
+        except TypeError as exc:
+            # The OpenAI SDK 2.24 ``responses.stream()`` helper runs
+            # ``parse_response`` when it sees ``response.completed`` and
+            # iterates ``response.output``.  The ChatGPT Codex backend
+            # (``chatgpt.com/backend-api/codex``) has an entitlement /
+            # backend bug — observed across the gpt-5.x family on Pro
+            # accounts — where the stream sends valid output_item.done
+            # events with text deltas, then a ``response.completed``
+            # whose ``output`` field is ``null``.  The SDK chokes with
+            # ``TypeError: 'NoneType' object is not iterable`` from
+            # ``openai/lib/_parsing/_responses.py``.  By the time we
+            # land here the iteration already collected the output
+            # items + text deltas, so synthesize a final response
+            # rather than burning the turn.
+            if "NoneType' object is not iterable" not in str(exc):
+                raise
+            assembled_text = "".join(agent._codex_streamed_text_parts or [])
+            if not collected_output_items and not assembled_text:
+                logger.debug(
+                    "Codex stream parse_response choked on null output and we "
+                    "have no collected items either; falling back to "
+                    "create(stream=True). %s",
+                    agent._client_log_context(),
+                )
+                return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+            synthesized = SimpleNamespace(
+                output=list(collected_output_items) if collected_output_items else [],
+                status="completed",
+                incomplete_details=None,
+                error=None,
+            )
+            if not synthesized.output and assembled_text and not has_tool_calls:
+                synthesized.output = [SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[SimpleNamespace(type="output_text", text=assembled_text)],
+                )]
+            logger.warning(
+                "Codex stream: SDK parse_response choked on null output; "
+                "synthesized response from %d collected items and %d text deltas. %s",
+                len(collected_output_items),
+                len(agent._codex_streamed_text_parts or []),
+                agent._client_log_context(),
+            )
+            return synthesized
 
 
 
