@@ -796,22 +796,50 @@ class _CodexCompletionsAdapter:
                 timeout_timer.daemon = True
                 timeout_timer.start()
             _check_cancelled()
-            with self._client.responses.stream(**resp_kwargs) as stream:
-                for _event in stream:
+            try:
+                with self._client.responses.stream(**resp_kwargs) as stream:
+                    for _event in stream:
+                        _check_cancelled()
+                        _etype = getattr(_event, "type", "")
+                        if _etype == "response.output_item.done":
+                            _done = getattr(_event, "item", None)
+                            if _done is not None:
+                                collected_output_items.append(_done)
+                        elif "output_text.delta" in _etype:
+                            _delta = getattr(_event, "delta", "")
+                            if _delta:
+                                collected_text_deltas.append(_delta)
+                        elif "function_call" in _etype:
+                            has_function_calls = True
                     _check_cancelled()
-                    _etype = getattr(_event, "type", "")
-                    if _etype == "response.output_item.done":
-                        _done = getattr(_event, "item", None)
-                        if _done is not None:
-                            collected_output_items.append(_done)
-                    elif "output_text.delta" in _etype:
-                        _delta = getattr(_event, "delta", "")
-                        if _delta:
-                            collected_text_deltas.append(_delta)
-                    elif "function_call" in _etype:
-                        has_function_calls = True
-                _check_cancelled()
-                final = stream.get_final_response()
+                    final = stream.get_final_response()
+            except TypeError as _sdk_exc:
+                # OpenAI SDK 2.24 responses.stream() runs parse_response on
+                # response.completed and iterates response.output. The
+                # ChatGPT Codex backend (chatgpt.com/backend-api/codex)
+                # sometimes sends response.completed with output: null —
+                # the SDK then raises "'NoneType' object is not iterable"
+                # from openai/lib/_parsing/_responses.py. Synthesize from
+                # the items we already collected during the stream rather
+                # than failing the auxiliary call. Mirrors the same
+                # recovery in agent/codex_runtime.run_codex_stream.
+                if "NoneType' object is not iterable" not in str(_sdk_exc):
+                    raise
+                if not collected_output_items and not collected_text_deltas:
+                    raise
+                final = SimpleNamespace(
+                    output=list(collected_output_items) if collected_output_items else [],
+                    status="completed",
+                    incomplete_details=None,
+                    error=None,
+                    usage=None,
+                )
+                logger.warning(
+                    "Codex auxiliary: SDK parse_response choked on null "
+                    "output; synthesized from %d items and %d text deltas",
+                    len(collected_output_items),
+                    len(collected_text_deltas),
+                )
 
             # Backfill empty output from collected stream events
             _output = getattr(final, "output", None)
